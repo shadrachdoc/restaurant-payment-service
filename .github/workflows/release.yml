@@ -1,0 +1,73 @@
+name: Release to Production
+
+on:
+  release:
+    types: [published]
+
+env:
+  DOCKER_IMAGE: shadrach85/restaurant-payment-service
+  SERVICE_NAME: payment-service
+  VALUES_KEY: paymentService
+
+jobs:
+  deploy-prod:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code at release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push release image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.DOCKER_IMAGE }}:${{ github.event.release.tag_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Checkout infrastructure repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/restaurant-infrastructure
+          token: ${{ secrets.GH_PAT }}
+          path: infrastructure
+
+      - name: Install yq
+        run: |
+          wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          chmod +x /usr/local/bin/yq
+
+      - name: Update prod values
+        run: |
+          cd infrastructure
+          yq -i '.${{ env.VALUES_KEY }}.image.tag = "${{ github.event.release.tag_name }}"' helm/restaurant-system/values-prod.yaml
+
+      - name: Commit and push
+        run: |
+          cd infrastructure
+          git config user.name "shadrach"
+          git config user.email "shadrachdoc@gmail.com"
+          git pull --rebase origin main || true
+          git add .
+          git diff --staged --quiet || git commit -m "Release ${{ env.SERVICE_NAME }}: ${{ github.event.release.tag_name }}"
+          git push
+
+      - name: Release summary
+        run: |
+          echo "## Production Release" >> $GITHUB_STEP_SUMMARY
+          echo "- **Service**: ${{ env.SERVICE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ github.event.release.tag_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: ${{ env.DOCKER_IMAGE }}:${{ github.event.release.tag_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **ArgoCD will automatically sync prod**" >> $GITHUB_STEP_SUMMARY
