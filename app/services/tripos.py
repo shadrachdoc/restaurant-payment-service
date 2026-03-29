@@ -95,3 +95,55 @@ async def charge_card_terminal(
         response = await client.post(url, headers=headers, content=body)
         response.raise_for_status()
         return response.json()
+
+
+async def return_card_terminal(
+    amount: float,
+    order_ref: str,
+    lane_id: int,
+    config: dict | None = None,
+) -> dict:
+    """
+    Send a return/refund to the physical card terminal via triPOS Cloud.
+    Customer taps/inserts card to receive refund. Blocks up to 90 seconds.
+    """
+    if config:
+        acceptor_id = config["acceptor_id"]
+        account_id = config["account_id"]
+        account_token = config["account_token"]
+        application_id = config["application_id"]
+        base_url = TRIPOS_HOSTS.get(config.get("environment", "cert"), TRIPOS_HOSTS["cert"])
+    else:
+        acceptor_id = settings.TRIPOS_ACCEPTOR_ID
+        account_id = settings.TRIPOS_ACCOUNT_ID
+        account_token = settings.TRIPOS_ACCOUNT_TOKEN
+        application_id = settings.TRIPOS_APPLICATION_ID
+        base_url = settings.TRIPOS_BASE_URL
+
+    payload = {
+        "laneId": lane_id,
+        "transactionAmount": round(amount, 2),
+        "referenceNumber": (order_ref[:8] + str(int(time.time()))[-4:])[:12],
+        "clerkNumber": "1",
+        "ticketNumber": order_ref[:20],
+    }
+    body = json.dumps(payload, separators=(",", ":"))
+    request_id = str(uuid.uuid4())
+
+    headers = {
+        "Content-Type": "application/json",
+        "tp-application-id": application_id,
+        "tp-application-name": "RestaurantPOS",
+        "tp-application-version": "1.0.0",
+        "tp-authorization": _build_auth_header(body, acceptor_id, application_id, account_token),
+        "tp-express-acceptor-id": acceptor_id,
+        "tp-express-account-id": account_id,
+        "tp-express-account-token": account_token,
+        "tp-request-id": request_id,
+    }
+
+    url = f"{base_url}/api/v1/return"
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        response = await client.post(url, headers=headers, content=body)
+        response.raise_for_status()
+        return response.json()

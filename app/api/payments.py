@@ -208,6 +208,58 @@ async def charge_card_terminal(request: CardTerminalRequest):
     )
 
 
+class CardRefundRequest(BaseModel):
+    restaurant_id: str
+    order_id: str
+    amount: float
+    lane_id: int
+
+
+@router.post("/card-refund", response_model=CardTerminalResponse)
+async def refund_card_terminal(request: CardRefundRequest):
+    """Send a return/refund to the physical card terminal via triPOS Cloud. Customer taps card."""
+    from app.services.tripos import return_card_terminal as tripos_return
+
+    restaurant = await _get_restaurant_payment_config(request.restaurant_id)
+
+    if not restaurant.get("tripos_enabled"):
+        raise HTTPException(status_code=400, detail="Worldpay triPOS is not enabled for this restaurant")
+
+    tripos_config = {
+        "acceptor_id": restaurant.get("tripos_acceptor_id"),
+        "account_id": restaurant.get("tripos_account_id"),
+        "account_token": restaurant.get("tripos_account_token"),
+        "application_id": restaurant.get("tripos_application_id"),
+        "environment": restaurant.get("tripos_environment", "cert"),
+    }
+    if not all([tripos_config["acceptor_id"], tripos_config["account_id"],
+                tripos_config["account_token"], tripos_config["application_id"]]):
+        raise HTTPException(status_code=400, detail="Worldpay triPOS credentials are incomplete")
+
+    try:
+        result = await tripos_return(
+            amount=request.amount,
+            order_ref=request.order_id,
+            lane_id=request.lane_id,
+            config=tripos_config,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Terminal error: {str(e)}")
+
+    logger.info("triPOS refund response: %s", result)
+    status_val = result.get("_statusCode") or result.get("statusCode", "")
+    approved = str(status_val).lower() == "approved"
+
+    card = result.get("card") or {}
+    return CardTerminalResponse(
+        approved=approved,
+        transaction_id=result.get("transactionId"),
+        card_brand=card.get("type") or result.get("cardType"),
+        card_last_four=card.get("last4") or result.get("maskedPan", "")[-4:] or None,
+        message=result.get("statusMessage") or status_val or "Unknown",
+    )
+
+
 @router.get("/{payment_id}", response_model=PaymentResponse)
 async def get_payment(payment_id: str):
     """Get payment details by ID"""
