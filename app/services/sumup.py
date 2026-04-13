@@ -50,7 +50,7 @@ async def create_checkout(
 
     data = resp.json()
     checkout_id = data.get("id")
-    checkout_url = f"https://pay.sumup.com/b2c/SUMUP{checkout_id}" if checkout_id else None
+    checkout_url = f"https://testenv.corpv3.com/pay/{checkout_id}" if checkout_id else None
 
     logger.info(f"SumUp checkout created: ref={reference} id={checkout_id} amount={amount}{currency}")
     return {
